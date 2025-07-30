@@ -1,0 +1,32 @@
+# Ignore python cache files
+__pycache__
+*.py[cod]
+
+# ignore jupyter notebook checkpoints
+.ipynb_checkpoints
+
+# Ignore Environment files
+.Environment
+.venv/
+env/
+venv/
+datascience/
+
+# Ignore Data Files
+*.csv
+*.json
+*.xlsx
+*.xls
+*.sqlite
+*.h5
+*.zip
+*.docx
+
+# ignore model weights
+*.h5
+*.pkl
+*.joblib
+
+# Ignore OS files
+.DS_Score
+Thumbs.db
