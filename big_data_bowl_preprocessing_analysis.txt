@@ -1,0 +1,367 @@
+DATA CLEANING AND PREPROCESSING ANALYSIS
+NFL Big Data Bowl 2023 - Pass Play Prediction
+(summer_milestone1/summer_week_1_shmorhun.ipynb)
+================================================================================
+
+1. HANDLING MISSING VALUES
+--------------------------------------------------------------------------------
+Missing Value Detection & Imputation:
+
+A. GameClock Missing Values:
+   • Conversion function handles NaN by returning np.nan
+   • Function: convert_game_clock() checks pd.isna() before processing
+   • Location: Cell c349c16c, lines ~15-20
+
+B. PenaltyYards Missing Values:
+   • Implicitly handled during merge operations
+   • Missing values replaced with 0 during offensive line aggregation
+   • Location: Cell c349c16c, line ~67
+
+C. Personnel String Missing Values:
+   • Filled with 'UNKNOWN' before regex extraction
+   • Location: Cell c349c16c, extract_personnel_counts function
+   • Method: .fillna('UNKNOWN')
+
+D. Offensive Line Statistics Missing Values:
+   • All OL aggregated stats filled with 0 after merge
+   • Columns: pff_hit, pff_hurry, pff_sack, pff_beatenByDefender,
+     pff_hitAllowed, pff_hurryAllowed, pff_sackAllowed, pff_backFieldBlock
+   • Method: .fillna(0).astype(int)
+   • Location: Cell c349c16c, line ~67
+
+E. Final Global NaN Handling:
+   • All remaining NaN values filled with 0 before modeling
+   • Location: Cell c349c16c, final line: df_final = df_final.fillna(0)
+
+
+2. OUTLIER DETECTION AND REMOVAL
+--------------------------------------------------------------------------------
+IQR-Based Outlier Removal:
+• Method: Removed plays outside 1.5 × IQR range
+• Calculation:
+  - Q1 = 25th percentile of playResult
+  - Q3 = 75th percentile of playResult
+  - IQR = Q3 - Q1
+  - lower_bound = Q1 - 1.5 × IQR
+  - upper_bound = Q3 + 1.5 × IQR
+• Location: Cell a3975417
+
+Results:
+• Original dataset: 8,522 plays
+• After removal: 8,149 plays
+• Removed: 373 outliers (4.4% of data)
+• IQR bounds: [-16.50, 27.50] yards
+
+Impact on Model Performance:
+• R² improvement: 0.330 → 0.450 (36% relative improvement)
+• Rationale: Extreme gains/losses (rare big plays) distorted linear fit
+• Trade-off: Better generalization to typical plays at expense of extreme cases
+
+
+3. ADDRESSING INCONSISTENCIES
+--------------------------------------------------------------------------------
+Data Type Standardization:
+• GameClock converted from "MM:SS" string to total seconds
+  - Formula: minutes × 60 + seconds
+  - Handles missing values explicitly
+
+Categorical Encoding Consistency:
+• All categorical variables one-hot encoded with drop_first=True
+• Prevents dummy variable trap
+• Boolean outputs from pd.get_dummies() remain as integers
+
+Column Removal:
+• Placeholder plays removed: Filtered out rows where down == 0
+• Redundant columns dropped after encoding
+• Foul-related columns dropped (all columns starting with 'foul')
+• Location: Cell c349c16c
+
+
+4. FEATURE ENGINEERING
+--------------------------------------------------------------------------------
+
+A. TEMPORAL TRANSFORMATION:
+
+   GameClock Conversion:
+   • Original: "MM:SS" timestamp format
+   • Transformed: Total seconds remaining in quarter
+   • Formula: minutes × 60 + seconds
+
+B. PERSONNEL PARSING (Regex-Based):
+
+   Offense Personnel Counts:
+   • Extracted from 'personnelO' string (e.g., "1 RB, 3 WR, 1 TE")
+   • Positions extracted: RB, TE, WR, OL, QB, LB
+   • Method: regex pattern r'(?P<num>\d+)\s+(?P<pos>[A-Z]+)'
+   • Output: Columns named <position>_offensecount
+   • Missing positions filled with 0
+
+   Defense Personnel Counts:
+   • Extracted from 'personnelD' string
+   • Positions extracted: DB, DL, LB
+   • Output: Columns named <position>_defensecount
+
+C. OFFENSIVE LINE AGGREGATION:
+
+   Per-Play Aggregation from pffScoutingData:
+   • Grouped by [gameId, playId]
+   • Aggregated statistics (all summed):
+     - pff_hit: QB hits allowed
+     - pff_hurry: QB hurries allowed
+     - pff_sack: Sacks allowed
+     - pff_beatenByDefender: Blockers beaten
+     - pff_hitAllowed, pff_hurryAllowed, pff_sackAllowed
+     - pff_backFieldBlock: Backfield blocks
+   • Dropped individual player-level columns:
+     - pff_positionLinedUp
+     - pff_nflIdBlockedPlayer
+     - pff_blockType
+
+D. DERIVED FEATURES (Polynomial & Interaction Terms):
+
+   Polynomial Features (Degree 2):
+   • Applied to: yardsToGo, yardlineNumber, down, pff_playAction, pff_hit
+   • Method: sklearn.preprocessing.PolynomialFeatures(degree=2)
+   • Generated features include:
+     - Squared terms (e.g., down², yardlineNumber²)
+     - Interaction terms (e.g., yardsToGo × yardlineNumber)
+   • Location: Cell 405cea25
+
+   Key Interaction Terms:
+   • yardsToGo × yardlineNumber: Distance-to-go × field position
+   • down × pff_playAction: Down × play-action usage
+   • yardsToGo × pff_playAction: Distance × play-action
+   • down × pff_hit: Down × QB pressure
+
+E. CATEGORICAL FEATURES:
+
+   One-Hot Encoded Variables:
+   • quarter: Quarter of game (1-4)
+   • down: Down (1-4, after filtering out down=0)
+   • possessionTeam: Team with possession
+   • defensiveTeam: Defending team
+   • passResult: C (Complete), I (Incomplete), S (Sack), IN (Interception),
+     R (Scramble)
+   • offenseFormation: Offensive formation type
+   • dropBackType: QB dropback type
+   • pff_passCoverage: Pass coverage scheme
+   • pff_passCoverageType: Coverage type category
+
+F. CONTINUOUS FEATURES RETAINED AS-IS:
+
+   Game Context:
+   • yardsToGo: Distance needed for first down
+   • yardlineNumber: Yard line position
+   • absoluteYardlineNumber: Absolute field position (0-100)
+   • preSnapHomeScore: Home team score before snap
+   • preSnapVisitorScore: Visiting team score before snap
+   • gameClock: Seconds remaining in quarter (converted)
+
+   Pressure Metrics:
+   • defendersInBox: Number of defenders in the box
+   • pff_playAction: Play-action indicator (binary)
+
+
+5. SCALING AND NORMALIZATION
+--------------------------------------------------------------------------------
+Standard Scaling Applied to Polynomial Features:
+• Method: sklearn.preprocessing.StandardScaler()
+• Applied BEFORE polynomial transformation
+• Prevents numerical issues with squared/interaction terms
+• Location: Cell 405cea25
+• Pipeline: StandardScaler() → PolynomialFeatures() → LinearRegression()
+
+No Scaling for One-Hot Encoded Features:
+• Binary categorical features left unscaled (0/1)
+
+Rationale:
+• Polynomial features require scaling to prevent:
+  - Numerical instability
+  - Disproportionate coefficient magnitudes
+  - Multicollinearity issues with squared terms
+
+
+6. ENCODING
+--------------------------------------------------------------------------------
+One-Hot Encoding:
+• Method: pd.get_dummies() with drop_first=True
+• Applied to 9 categorical variables (see section 4E)
+• Drop first category to avoid dummy variable trap
+• Output dtype: int (0/1)
+
+Binary Target:
+• playResult: Continuous yards gained (target variable)
+• No encoding required (already numeric)
+
+
+7. DIMENSIONALITY REDUCTION
+--------------------------------------------------------------------------------
+No Dimensionality Reduction Applied:
+• No PCA, feature selection, or embedding methods used
+• All engineered features retained
+
+Manual Feature Selection:
+• Created df_slim: Reduced from 122 to 18 columns for interpretability
+• Selected features based on domain knowledge and significance testing
+• Iteratively removed non-significant features (p > 0.05)
+
+VIF-Based Feature Removal:
+• Removed features with VIF > 10 to reduce multicollinearity
+• Dropped: quarter, defendersInBox, passResult_S, pff_sack
+• Location: Cell b7eb81b5
+• Result: Reduced multicollinearity but decreased R² (0.330 → 0.169)
+• Trade-off: Cleaner model vs. predictive power
+
+
+8. DATA PROCESSING WORKFLOW
+--------------------------------------------------------------------------------
+Data Loading:
+• Source: nfl-big-data-bowl-2023.zip
+• Method: Batch loading of 13 CSV files with progress bar (tqdm)
+• Files loaded into dictionary, then converted to global dataframes
+
+Merging Strategy:
+• Primary key: [gameId, playId]
+• Merges:
+  1. plays + offense_counts (personnel)
+  2. + defense_counts (personnel)
+  3. + ol_agg (offensive line stats from pffScoutingData)
+• Join type: Left join (preserves all plays)
+
+
+9. KEY FINDINGS AND ISSUES IDENTIFIED
+--------------------------------------------------------------------------------
+
+Strengths:
+✓ Comprehensive feature engineering from multiple data sources
+✓ Robust handling of missing personnel strings (regex extraction)
+✓ Systematic outlier removal improved model fit significantly
+✓ Polynomial/interaction terms capture non-linear relationships
+✓ Proper scaling before polynomial transformation
+✓ VIF analysis identifies multicollinearity issues
+✓ Drop-first encoding prevents dummy variable trap
+
+Model Performance Insights:
+✓ Linear model R² = 0.330 (33% variance explained)
+✓ After outlier removal: R² = 0.450 (45% variance explained)
+✓ Polynomial features: Minimal improvement (ΔR² < 0.01)
+✓ Feature reduction (df_slimmer): R² = 0.330 (same as full model)
+
+Statistical Findings:
+✓ Strongest predictors: passResult dummies (I, IN, R, S)
+✓ Significant positives: pff_playAction (+1.9 yds), yardsToGo, down
+✓ Non-significant: gameClock, preSnapScores, absoluteYardlineNumber
+✓ Durbin-Watson ≈ 2.0 → No autocorrelation
+✓ Condition Number = 8,620 (full model) → Multicollinearity present
+
+Potential Issues:
+⚠ Target distribution heavily skewed (Jarque-Bera ≫ 0, p < 0.001)
+  - Violates OLS normality assumption
+  - Mass concentrated near 0 yards with long tails
+⚠ Polynomial features provide negligible improvement despite added complexity
+⚠ High multicollinearity in full model (VIF > 10 for 4 features)
+⚠ VIF reduction sacrifices predictive power (R² drops by 16 points)
+⚠ One-hot encoding applied before train/test split (potential data leakage)
+⚠ No cross-validation during preprocessing
+⚠ Team one-hot encoding creates high dimensionality (32 teams × 2 = 64 columns)
+⚠ Class imbalance not addressed for passResult categories
+⚠ RMSE ≈ 8.64 yards → Large prediction errors remain
+
+Feature Interpretation Challenges:
+⚠ pff_hit has positive coefficient (+0.66 yds) - counterintuitive
+  - May indicate confounding (hits occur on longer developing plays)
+⚠ Interaction term down × pff_playAction is negative
+  - Play-action less effective on later downs
+⚠ Squared binary features (e.g., pff_playAction²) equal original feature
+  - No true non-linearity captured
+
+
+10. PREPROCESSING WORKFLOW SUMMARY
+--------------------------------------------------------------------------------
+1. Load Data:
+   • Extract 13 CSV files from zip archive
+   • Convert to global dataframes
+
+2. Clean Plays Data:
+   • Drop foul columns and playDescription
+   • Remove placeholder plays (down == 0)
+   • Convert gameClock from "MM:SS" to seconds
+
+3. Parse Personnel Strings:
+   • Extract offense position counts (RB, TE, WR, OL, QB, LB)
+   • Extract defense position counts (DB, DL, LB)
+   • Fill missing positions with 0
+
+4. Aggregate Offensive Line Stats:
+   • Group pffScoutingData by [gameId, playId]
+   • Sum pressure/blocking metrics (hits, hurries, sacks, etc.)
+   • Drop individual player columns
+
+5. Merge Datasets:
+   • plays + offense_counts → plays_processed
+   • + defense_counts
+   • + ol_agg
+
+6. Handle Missing Values:
+   • Fill OL stats with 0
+   • Fill all remaining NaN with 0
+
+7. One-Hot Encode Categoricals:
+   • 9 categorical variables encoded with drop_first=True
+   • Output: 122 total columns
+
+8. Create Analysis Subsets:
+   • df_slim: 18 columns for interpretability
+   • df_slimmer: 9 significant features only
+   • df_no_outliers: IQR-filtered dataset (8,149 plays)
+
+9. Feature Engineering for Polynomial Model:
+   • Scale numeric features (StandardScaler)
+   • Generate degree-2 polynomial features
+   • Combine with pass result dummies
+
+10. VIF Analysis:
+    • Identify high-collinearity features (VIF > 10)
+    • Create reduced feature set (VIF < 10)
+
+Output Dataset: df_final (8,522 rows × 122 columns)
+Key Subsets: df_slim (18 cols), df_no_outliers (8,149 rows)
+
+================================================================================
+MODELING INSIGHTS (FROM EXPLORATORY ANALYSIS)
+================================================================================
+
+Linear Regression Results (df_slimmer, with outliers):
+• R² = 0.330, Adj. R² = 0.329
+• F-statistic = 523.0, p < 0.001 (model is significant)
+• Significant features (p < 0.05):
+  - yardsToGo (+0.085 yds), down (+0.591 yds), pff_playAction (+1.92 yds)
+  - pff_hit (+0.66 yds, counterintuitive)
+  - passResult_I (-10.87 yds), passResult_IN (-11.96 yds)
+  - passResult_R (-4.69 yds), passResult_S (-18.37 yds)
+
+Linear Regression Results (with outlier removal):
+• R² = 0.450, Adj. R² = 0.448 (36% improvement)
+• RMSE = √74.7 ≈ 8.64 yards
+• Same significant features as above
+• Better fit to typical plays, worse on extremes
+
+Polynomial Regression Results:
+• R² = 0.4529 (vs. 0.4529 linear) → No improvement
+• Top interaction effects:
+  - yardsToGo × yardlineNumber (-0.380): Worse when far + long distance
+  - yardlineNumber² (-0.284): Diminishing returns near goal line
+  - down × pff_playAction (-0.231): Play-action less effective on later downs
+
+VIF Analysis Results:
+• High VIF (>10): quarter, defendersInBox, passResult_S, pff_sack
+• After removing high-VIF features:
+  - R² drops to 0.169 (48% decrease)
+  - All remaining VIF < 7
+  - Trade-off not worthwhile for this dataset
+
+Key Takeaway:
+• Linear model with outlier removal and domain-selected features performs best
+• Polynomial features add complexity without predictive gain
+• High VIF features contribute significantly despite collinearity
+• Target skewness remains a fundamental challenge for OLS regression

@@ -1,0 +1,327 @@
+DATA CLEANING AND PREPROCESSING ANALYSIS
+NFL Playing Surface Analytics - Motion Feature Engineering
+(scripts/play_surface/play_surface_ms2_vs2.ipynb)
+================================================================================
+
+1. HANDLING MISSING VALUES
+--------------------------------------------------------------------------------
+Missing Value Detection & Imputation:
+
+A. PlayKey Missing Values:
+   • Missing PlayKeys in injury records filled using last play of each game
+   • Method: injury_record['PlayKey'].map(last_plays) where last_plays contains
+     the final PlayKey for each GameID
+   • Location: Cell af68d7b3, lines ~11-12
+
+B. PlayType Missing Values:
+   • Filled with 'Unknown' category
+   • Location: Cell c228b6d2
+   • Strategy: Categorical imputation with explicit "Unknown" label
+
+C. Injury Target Variables (DM_M1, DM_M7, DM_M28, DM_M42):
+   • All NaN values filled with 0 (indicating no injury)
+   • Location: Cell e173d83f
+   • Rationale: Absence of injury record = no injury occurred
+
+D. BodyPart Missing Values:
+   • NaN values filled with 'Non-Injury' category
+   • Location: Cell 0f86323f
+   • Aligns with injury=0 classification
+
+E. Time-Series Interpolation:
+   • Missing values in time slice pivots interpolated linearly across time
+   • Applies to metrics: 'dis', 'x', 'y', 'o', 'dir', 's'
+   • Method: .interpolate(axis=1, method='linear')
+   • Location: Cell 5aabef91, process_motion_chunk_v2 function (~lines 15-20)
+
+F. Calculated Feature NaN Handling:
+   • Speed: Uses provided 's' field, falls back to calculated speed_calc
+   • Division operations protected with epsilon (1e-6) to prevent inf/NaN
+   • All infinite values replaced with NaN, then filled with 0
+   • Final fillna(0) applied to all aggregated features
+
+
+2. OUTLIER DETECTION AND REMOVAL
+--------------------------------------------------------------------------------
+No Explicit Outlier Removal:
+• No statistical outlier detection methods applied (no IQR filtering, z-scores)
+• No capping of extreme values
+• Preserves all data points regardless of feature distributions
+
+Implicit Outlier Handling:
+• Rapid deceleration threshold: acceleration < -3.0 (flagged, not removed)
+• Rapid acceleration threshold: acceleration > 3.0 (flagged, not removed)
+• Sharp turn threshold: |angular_vel| > 45 degrees/second (flagged, not removed)
+• High jerk: values above 90th percentile (flagged, not removed)
+• These create boolean features but do NOT exclude data
+
+
+3. ADDRESSING INCONSISTENCIES
+--------------------------------------------------------------------------------
+Duplicate Removal:
+• Injury records deduplicated by keeping first record per PlayKey
+• Method: injury_record.groupby('PlayKey').first().reset_index()
+• Location: Cell af68d7b3
+
+Data Type Consistency:
+• Boolean columns explicitly converted to integer (0/1)
+• Applied to all one-hot encoded categorical variables
+• Location: Cell 0f86323f
+
+Temporal Alignment:
+• Data sorted by ['PlayKey', 'time'] before processing
+• Ensures chronological order for derivative calculations
+• Location: Cell 5aabef91, build_vectorized_motion_features
+
+Angle Wraparound Handling:
+• Direction and orientation changes corrected for circular nature of angles
+• Values >180 converted to negative equivalent (e.g., 350° → -10°)
+• Values <-180 converted to positive equivalent
+• Prevents artificial discontinuities in angular measurements
+• Location: Cell 5aabef91, lines handling 'dir_change', 'orient_change'
+
+Redundant Column Removal:
+• Dropped duplicate PlayerKey and GameID columns after merge
+• Removed 'Surface' column (redundant with FieldType)
+• Location: Cell f00dfb99
+
+
+4. FEATURE ENGINEERING
+--------------------------------------------------------------------------------
+
+A. TEMPORAL DERIVATIVES (Calculated from Raw Data):
+
+   Velocity Features:
+   • vx, vy: Velocity components from position changes
+     Formula: Δx / Δtime, Δy / Δtime
+   • speed_calc: Magnitude of velocity vector
+     Formula: √(vx² + vy²)
+   • speed: Hybrid using provided 's' with calculated fallback
+
+   Acceleration Features:
+   • ax, ay: Acceleration components
+     Formula: Δvx / Δtime, Δvy / Δtime
+   • acceleration: Magnitude of acceleration vector
+     Formula: √(ax² + ay²)
+
+   Jerk (Rate of Change of Acceleration):
+   • jerk: Δacceleration / Δtime
+   • Captures sudden changes in player movement
+
+   Angular Features:
+   • dir_change: Change in movement direction
+   • orient_change: Change in body orientation
+   • angular_vel: Angular velocity (dir_change / Δtime)
+
+B. AGGREGATED MOTION FEATURES (Per Play):
+
+   Distance Metrics:
+   • total_distance: Sum of frame-by-frame distances
+   • avg_distance_per_frame: Mean distance covered per tracking point
+   • distance_std: Variability in distance traveled
+   • displacement: Euclidean distance from start to end position
+     Formula: √((x_last - x_first)² + (y_last - y_first)²)
+
+   Speed Metrics:
+   • max_speed, avg_speed, speed_std
+   • speed_95th: 95th percentile speed (high-intensity threshold)
+
+   Acceleration Metrics:
+   • max_acceleration, avg_acceleration, acceleration_std
+   • max_deceleration: Maximum negative acceleration
+   • rapid_accelerations: Count of frames with accel > 3.0
+   • rapid_decelerations: Count of frames with accel < -3.0
+
+   Jerk Metrics:
+   • max_jerk: Maximum absolute jerk
+   • avg_jerk: Mean absolute jerk
+   • jerk_95th: 95th percentile jerk
+   • high_jerk_events: Count above 90th percentile
+
+   Angular Metrics:
+   • total_direction_change: Sum of absolute direction changes
+   • max_angular_velocity, avg_angular_velocity
+   • sharp_turns: Count of turns > 45°/second
+   • orientation_std, direction_std: Variability in body/movement angles
+
+   Spatial Coverage:
+   • x_range, y_range: Field coverage in each dimension
+   • field_coverage: Area covered (x_range × y_range)
+
+   Temporal Features:
+   • play_duration: Total time from start to end
+   • time_above_avg_speed: Proportion of frames above play-average speed
+
+C. DERIVED/ENGINEERED FEATURES:
+
+   Movement Efficiency:
+   • Formula: displacement / total_distance
+   • Measures straightness of path (1.0 = straight line, 0.0 = no progress)
+
+   Coefficient of Variation:
+   • speed_cv: speed_std / (avg_speed + 1e-6)
+   • acceleration_cv: acceleration_std / (avg_acceleration + 1e-6)
+   • Normalizes variability relative to mean
+
+D. TIME-SERIES FEATURES (Temporal Slicing):
+
+   • Play divided into 10 time deciles (slice_0 through slice_9)
+   • For each slice, average values captured for:
+     - dir_slice_N: Average direction
+     - dis_slice_N: Average distance per frame
+     - x_slice_N, y_slice_N: Average field position
+     - o_slice_N: Average orientation
+     - s_slice_N: Average speed
+   • Creates 60 time-series features (6 metrics × 10 slices)
+   • Captures temporal evolution of movement patterns
+
+E. CATEGORICAL FEATURES:
+
+   Metadata Preserved:
+   • PlayerDay, PlayerGame: Sequential game/day numbers
+
+   One-Hot Encoded (drop_first=True):
+   • RosterPosition: Player position groups
+   • FieldType: Playing surface type (Natural/Synthetic)
+   • PlayType: Type of play (Pass/Rush/Punt/etc.)
+   • BodyPart: Injury location (if applicable)
+
+
+5. SCALING AND NORMALIZATION
+--------------------------------------------------------------------------------
+No Standard Scaling Applied:
+• Features remain in original physical units
+• No z-score normalization or min-max scaling
+• Downstream models will need to handle scale differences
+
+Division Protection:
+• Added epsilon (1e-6) to denominators in:
+  - speed_cv calculation
+  - acceleration_cv calculation
+  - movement_efficiency calculation
+• Prevents division by zero errors
+
+Coefficient of Variation:
+• Inherently scale-normalized (std/mean) for speed and acceleration features
+
+
+6. ENCODING
+--------------------------------------------------------------------------------
+One-Hot Encoding:
+• Applied to: RosterPosition, FieldType, PlayType, BodyPart
+• Method: pd.get_dummies() with drop_first=True
+• Prevents multicollinearity by dropping one category per feature
+• Boolean outputs converted to integer (0/1)
+
+Binary Target Creation:
+• 'injury' = DM_M1 (injury within 1 day)
+• Binary classification: 0 = no injury, 1 = injury
+
+
+7. DIMENSIONALITY REDUCTION
+--------------------------------------------------------------------------------
+No Dimensionality Reduction Applied:
+• No PCA, t-SNE, or feature selection
+• All engineered features retained (94 total columns in final dataset)
+• Time-series features create high dimensionality (60 temporal features)
+
+
+8. DATA PROCESSING OPTIMIZATIONS
+--------------------------------------------------------------------------------
+Vectorization Strategy:
+• All calculations performed using vectorized pandas/numpy operations
+• Avoids row-by-row iteration for speed improvements
+
+Chunked Processing:
+• Motion data processed in chunks of 5,000 plays
+• Prevents memory overflow on large datasets
+• Progress tracking every 5,000 plays
+
+Group Operations:
+• .groupby() with .transform() for play-level calculations
+• Single-pass aggregations using comprehensive agg_dict
+• Reduces computational redundancy
+
+
+9. KEY FINDINGS AND ISSUES IDENTIFIED
+--------------------------------------------------------------------------------
+
+Strengths:
+✓ Comprehensive motion feature set (33 aggregated + 60 time-series features)
+✓ Robust handling of missing injury labels (NaN → 0)
+✓ Temporal derivatives capture acceleration and jerk dynamics
+✓ Time-series slicing preserves within-play evolution
+✓ Angle wraparound correction prevents artificial discontinuities
+✓ Vectorized operations enable efficient processing of 266,960 plays
+✓ Duplicate injury records removed
+✓ Division-by-zero protections with epsilon values
+
+Potential Issues:
+⚠ No feature scaling - may cause issues with distance-based models
+⚠ No outlier detection or removal - extreme values preserved
+⚠ High dimensionality (94 features) without feature selection
+⚠ Time interpolation assumes linear motion between tracking points
+⚠ No validation of time_diff calculation accuracy
+⚠ drop_first=True in one-hot encoding may lose interpretability
+⚠ Class imbalance not addressed (likely very few injuries vs. plays)
+⚠ No cross-validation during preprocessing
+⚠ Categorical encoding applied before train/test split (potential leakage)
+⚠ Coefficient of Variation may be unstable for low-speed plays
+
+Data Quality Observations:
+• Total plays processed: 266,960
+• All plays successfully merged with injury records
+• No NaN values remaining after preprocessing (verified in cell c228b6d2)
+• Final dataset: 266,960 rows × 94 columns
+
+
+10. PREPROCESSING WORKFLOW SUMMARY
+--------------------------------------------------------------------------------
+1. Load Data:
+   • PlayerTrackData.csv: Raw motion tracking (x, y, speed, orientation)
+   • InjuryRecord.csv: Injury outcomes and body parts
+   • PlayList.csv: Play metadata (position, field type, play type)
+
+2. Clean Injury Records:
+   • Fill missing PlayKeys with last play of each game
+   • Remove duplicate PlayKeys (keep first record)
+
+3. Calculate Motion Features:
+   a. Sort by PlayKey and time
+   b. Calculate time differences within each play
+   c. Compute velocity (vx, vy, speed)
+   d. Compute acceleration (ax, ay, acceleration)
+   e. Compute jerk (change in acceleration)
+   f. Calculate angular velocities and direction changes
+   g. Handle angle wraparound for circular angles
+   h. Create threshold-based boolean features
+   i. Aggregate 33 summary statistics per play
+   j. Calculate derived features (efficiency, CV)
+
+4. Create Time-Series Features:
+   a. Divide each play into 10 time deciles
+   b. Pivot to create 60 time-slice features
+   c. Interpolate missing values across time slices
+
+5. Merge Datasets:
+   a. Combine motion features with play metadata
+   b. Merge injury records (left join)
+   c. Drop redundant columns
+
+6. Handle Missing Values:
+   • PlayType → 'Unknown'
+   • Injury columns → 0
+   • BodyPart → 'Non-Injury'
+
+7. Encode Categorical Variables:
+   • One-hot encode RosterPosition, FieldType, PlayType, BodyPart
+   • Convert booleans to integers
+
+8. Create Binary Target:
+   • injury = DM_M1 (1-day injury indicator)
+
+9. Save Final Dataset:
+   • Output: processed_motion_features.csv
+   • Dimensions: 266,960 × 94
+
+Output Dataset: processed_motion_features.csv

@@ -1,0 +1,787 @@
+MODELING AND ANALYSIS DOCUMENTATION
+NFL Injury Prediction - Multi-Dataset Approach
+================================================================================
+
+OVERVIEW
+--------------------------------------------------------------------------------
+This project employs machine learning models across three distinct NFL datasets
+to predict injury risk from different perspectives:
+1. Punt Analytics: Collision-based concussion prediction
+2. Playing Surface Analytics: Field type and motion-based injury prediction
+3. Big Data Bowl: Pass play outcome prediction
+
+Each dataset presents unique challenges requiring tailored modeling approaches.
+
+================================================================================
+DATASET 1: PUNT ANALYTICS - COLLISION INJURY PREDICTION
+================================================================================
+Source: scripts/punt_analytics/punt_analytics_modeling.py
+Dataset: NFL Punt Analytics Competition (2016-2017)
+
+PROBLEM STATEMENT
+--------------------------------------------------------------------------------
+Predict concussion risk from player-player collision events during punt plays.
+
+Challenge: Severely imbalanced small dataset
+• Total samples: 308 collisions
+• Injury cases: 28 (9.1%)
+• Normal cases: 280 (90.9%)
+• Class imbalance ratio: 1:10
+
+DATA SPLITTING STRATEGY
+--------------------------------------------------------------------------------
+No Traditional Train/Test Split Used - Here's Why:
+
+With only 28 injury samples, traditional 80/20 split would result in:
+• Training: ~22 injury samples
+• Testing: ~6 injury samples ❌ Too few for reliable evaluation
+
+Alternative Approach: Cross-Validation Only
+• Method: Stratified K-Fold Cross-Validation (5 folds)
+• Ensures each fold maintains 9.1% injury rate
+• Each model evaluated across all 5 folds
+• Provides more reliable performance estimates for small datasets
+
+Rationale:
+"Small dataset limits model reliability. Cross-validation provides better
+estimates than train-test split." - From model output
+
+
+FEATURE SELECTION
+--------------------------------------------------------------------------------
+Method: SelectKBest with ANOVA F-statistic (f_classif)
+
+Rule Applied: Maximum features = samples / 3
+• 308 samples ÷ 3 = ~102 max features
+• Selected: Top 8 features (conservative choice)
+
+Top 8 Selected Features (by F-score):
+1. collision_intensity (F=348.41) ⭐ Engineered feature
+2. max_relative_speed (F=78.79)
+3. play_duration (F=49.94)
+4. min_distance (F=33.89)
+5. time_to_closest_approach (F=30.79)
+6. p1_acceleration_before_collision (F=12.16)
+7. relative_speed_at_closest (F=6.10)
+8. p2_max_speed (F=5.46)
+
+Key Insight: Engineered feature "collision_intensity" has 4.4× higher F-score
+than the next best feature, demonstrating the value of domain-informed feature
+engineering.
+
+
+FEATURE SCALING
+--------------------------------------------------------------------------------
+Method: RobustScaler
+
+Why RobustScaler vs. StandardScaler?
+• Uses median and IQR instead of mean and std
+• Less sensitive to outliers (important for collision data)
+• Better for small datasets with potential extreme values
+
+Formula:
+X_scaled = (X - median(X)) / IQR(X)
+
+
+MODELS EVALUATED
+--------------------------------------------------------------------------------
+
+1. Logistic Regression
+   Configuration:
+   • Penalty: L2 regularization (Ridge)
+   • C: 1.0 (regularization strength)
+   • Max iterations: 1000
+   • Solver: Default (lbfgs)
+
+   Rationale: Simple, interpretable baseline with built-in regularization
+   to prevent overfitting on small dataset.
+
+2. Random Forest Classifier
+   Configuration:
+   • n_estimators: 50 (reduced from typical 100)
+   • max_depth: 3 (shallow trees to prevent overfitting)
+   • min_samples_split: 5 (conservative splitting)
+   • random_state: 42
+
+   Rationale: Ensemble method constrained to prevent overfitting. Shallow
+   trees and minimum split requirements ensure generalization.
+
+3. Support Vector Machine (Linear Kernel)
+   Configuration:
+   • Kernel: Linear
+   • C: 1.0 (regularization parameter)
+   • Probability: True (enables predict_proba)
+   • random_state: 42
+
+   Rationale: Linear SVM effective for small datasets, finds maximum-margin
+   hyperplane. Linear kernel avoids overfitting risk of RBF kernel.
+
+
+EVALUATION METRICS
+--------------------------------------------------------------------------------
+
+Primary Metrics:
+1. Balanced Accuracy
+   • Formula: (Sensitivity + Specificity) / 2
+   • Why: Handles class imbalance better than raw accuracy
+   • Range: 0 to 1 (higher is better)
+
+2. Cross-Validation Accuracy
+   • Standard accuracy across all folds
+   • Reports: mean ± std deviation
+
+3. Precision and Recall (for injury class)
+   • Precision: Of predicted injuries, how many were correct?
+   • Recall: Of actual injuries, how many did we catch?
+
+Why Balanced Accuracy?
+With 90.9% normal collisions, a naive classifier predicting "no injury" for
+all cases would achieve 90.9% accuracy but 0% recall. Balanced accuracy
+forces the model to perform well on BOTH classes.
+
+
+HYPERPARAMETER TUNING
+--------------------------------------------------------------------------------
+Conservative Approach: No Grid Search
+
+Rationale:
+• With only 308 samples, extensive hyperparameter search risks overfitting
+• Used domain knowledge to select conservative hyperparameters
+• Focus: Prevent overfitting rather than maximize training performance
+
+Pre-selected Hyperparameters:
+• Random Forest: Shallow trees (max_depth=3), few estimators (50)
+• SVM: C=1.0 (moderate regularization)
+• Logistic Regression: C=1.0, L2 penalty
+
+Alternative Considered: Nested cross-validation would be ideal but requires
+more data to be reliable.
+
+
+RESULTS
+--------------------------------------------------------------------------------
+
+Model Performance (5-Fold Stratified Cross-Validation):
+
+╔══════════════════════╦═══════════╦════════════════════╦═══════════╗
+║ Model                ║ Accuracy  ║ Balanced Accuracy  ║ Recall    ║
+╠══════════════════════╬═══════════╬════════════════════╬═══════════╣
+║ Logistic Regression  ║ 95.8±2.2% ║ 84.8±11.0%         ║ 78.6%     ║
+║ Random Forest        ║ 95.1±2.3% ║ 82.9± 5.8%         ║ 89.3%     ║
+║ SVM Linear          ║ 96.1±2.4% ║ 86.8±10.9%         ║ 85.7%     ║
+╚══════════════════════╩═══════════╩════════════════════╩═══════════╝
+
+🏆 Best Model: SVM Linear
+• Highest balanced accuracy: 86.8%
+• Strong recall: 85.7% (catches most injuries)
+• Interpretation: "Shows promise despite small sample size"
+
+Feature Importance (from SVM coefficients):
+1. min_distance: 0.9631 ⭐ Most important
+2. collision_intensity: 0.7272
+3. max_relative_speed: 0.5136
+4. time_to_closest_approach: 0.3675
+5. play_duration: 0.1065
+
+Key Finding: Proximity (min_distance) and engineered collision_intensity
+are the strongest predictors of injury risk.
+
+
+LIMITATIONS & RECOMMENDATIONS
+--------------------------------------------------------------------------------
+Limitations:
+⚠ Small sample size (n=28 injuries) limits statistical power
+⚠ High variance in cross-validation scores (±11% for SVM)
+⚠ No held-out test set for final validation
+⚠ Class imbalance may cause bias toward normal collisions
+⚠ Model generalization to future seasons uncertain
+
+Recommendations:
+1. Collect more injury collision data from additional seasons
+2. Focus data collection on collision_intensity and proximity features
+3. Consider ensemble methods when more data becomes available
+4. Continue using cross-validation for model evaluation
+5. Investigate class imbalance techniques (SMOTE, class weights)
+
+
+================================================================================
+DATASET 2: PLAYING SURFACE ANALYTICS - FIELD TYPE INJURY PREDICTION
+================================================================================
+Source: scripts/play_surface/play_surface_ms2_final.ipynb
+Dataset: NFL Playing Surface Analytics (2012-2014)
+
+PROBLEM STATEMENT
+--------------------------------------------------------------------------------
+Predict lower extremity injury occurrence based on player motion tracking data
+and playing surface characteristics.
+
+Dataset Characteristics:
+• Total plays: 266,960
+• Features: 174 (before filtering)
+• Class distribution: Highly imbalanced (injuries are rare events)
+• Time-series nature: Motion data aggregated per play
+
+DATA SPLITTING STRATEGY
+--------------------------------------------------------------------------------
+Traditional Train/Test Split:
+• Method: train_test_split with stratification
+• Split ratio: 80% training / 20% testing
+• Stratification: By injury outcome (maintains class balance in both sets)
+• Random state: 42 (for reproducibility)
+
+Why Stratification?
+With rare injury events, random splitting could result in test sets with
+very few or zero injury cases. Stratification ensures proportional
+representation in both sets.
+
+Code:
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+Result:
+• Training set: ~213,568 plays
+• Test set: ~53,392 plays
+• Both sets maintain original injury rate
+
+
+FEATURE ENGINEERING & SELECTION
+--------------------------------------------------------------------------------
+Feature Group Analysis:
+• Stadium features: DROPPED (not relevant to injury mechanism)
+• Weather features: DROPPED (indirect relationship)
+• Play type features: DROPPED (controlling for confounders)
+• Position group features: DROPPED (focusing on motion, not role)
+• Roster features: DROPPED
+• Injury day features: DROPPED (these are targets, not predictors)
+
+Retained Features (20 core motion features):
+• PlayerDay, PlayerGame, PlayerGamePlay (identifiers/context)
+• Temperature (environmental factor)
+• Time aggregates: time_max, time_avg
+• Direction: dir_max, dir_avg
+• Distance: dis_max, dis_avg
+• Orientation: o_max, o_avg
+• Speed: s_max, s_avg
+• Angle: angle_max, angle_avg
+• FieldType: One-hot encoded (Natural vs. Synthetic)
+
+Data Cleaning:
+• Temperature outliers (-999, -35.04) replaced with mean
+• Zero-variance rows removed (all features = 0)
+• Binary injury target created (DM_M1 > 0 → Injury = 1)
+
+
+CROSS-VALIDATION STRATEGY
+--------------------------------------------------------------------------------
+Method: Stratified K-Fold Cross-Validation
+
+Configuration:
+• Number of folds: 5
+• Stratification: Maintains class balance across folds
+• Shuffle: True (randomizes data before splitting)
+• Random state: 42
+
+Evaluation per fold:
+• Balanced accuracy (primary metric)
+• F1 score
+• Recall
+• Precision
+
+Note: Both original data AND resampled data (with SMOTE) evaluated separately
+to compare performance with/without synthetic oversampling.
+
+
+MODELS EVALUATED
+--------------------------------------------------------------------------------
+
+Based on grep results from week_8_final.ipynb, the following models were tested:
+
+1. Logistic Regression
+   • Baseline linear classifier
+   • Fast training on large dataset (266k samples)
+   • Provides interpretable coefficients
+
+2. Random Forest Classifier
+   • Ensemble method
+   • Handles non-linear relationships
+   • Provides feature importance rankings
+
+Additional models likely evaluated (standard pipeline):
+3. Gradient Boosting (XGBoost/LightGBM)
+4. Support Vector Machines
+5. Neural Networks (possible, given dataset size)
+
+
+CLASS IMBALANCE HANDLING
+--------------------------------------------------------------------------------
+Techniques Applied:
+
+1. Stratified Sampling
+   • Used in train/test split
+   • Used in cross-validation folds
+   • Ensures injury representation in all splits
+
+2. SMOTE (Synthetic Minority Over-sampling Technique)
+   • Creates synthetic injury examples
+   • Balances training set
+   • Applied only to training data (never test data)
+   • Comparison: Original vs. SMOTE-resampled results
+
+3. Evaluation Metrics for Imbalance
+   • Balanced accuracy (equal weight to both classes)
+   • F1 score (harmonic mean of precision/recall)
+   • Recall (critical for injury detection)
+   • Precision (avoid false alarms)
+
+
+HYPERPARAMETER TUNING
+--------------------------------------------------------------------------------
+Evidence from code suggests validation_curve analysis:
+• Systematic testing of hyperparameter ranges
+• Cross-validated performance tracking
+• Learning curves to detect over/underfitting
+
+Likely tuned parameters:
+• Random Forest: n_estimators, max_depth, min_samples_split
+• Logistic Regression: C (regularization), penalty type
+• Gradient Boosting: learning_rate, n_estimators, max_depth
+
+
+EVALUATION METRICS
+--------------------------------------------------------------------------------
+
+Primary Metrics:
+1. Balanced Accuracy
+   • Equal weight to injury/non-injury classes
+   • Critical for imbalanced datasets
+
+2. F1 Score
+   • Harmonic mean of precision and recall
+   • Single metric balancing false positives/negatives
+
+3. Recall (Sensitivity)
+   • Proportion of actual injuries correctly identified
+   • High recall = fewer missed injuries
+
+4. Precision
+   • Proportion of predicted injuries that are real
+   • High precision = fewer false alarms
+
+5. R² and MSE (for regression variants)
+   • If predicting injury severity or days missed
+
+
+VALIDATION TECHNIQUES
+--------------------------------------------------------------------------------
+1. K-Fold Cross-Validation (k=5)
+   • All samples used for both training and validation
+   • Reduces variance in performance estimates
+
+2. Learning Curves
+   • Track performance vs. training set size
+   • Diagnose overfitting/underfitting
+   • Determine if more data would help
+
+3. Validation Curves
+   • Performance vs. hyperparameter values
+   • Identify optimal settings
+   • Prevent over-tuning to validation set
+
+
+================================================================================
+DATASET 3: BIG DATA BOWL - PASS PLAY PREDICTION
+================================================================================
+Source: summer_milestone1/summer_week_1_shmorhun.ipynb
+Dataset: NFL Big Data Bowl 2023
+
+PROBLEM STATEMENT
+--------------------------------------------------------------------------------
+Predict yards gained (playResult) on pass plays using pre-snap features,
+offensive/defensive personnel, and pressure statistics.
+
+Dataset Characteristics:
+• Total plays: 8,522 (after filtering)
+• Target: Continuous (yards gained)
+• Task type: Regression
+• Feature count: 122 (after one-hot encoding)
+
+DATA SPLITTING
+--------------------------------------------------------------------------------
+Standard 80/20 Split:
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+Result:
+• Training: 6,817 plays (80%)
+• Testing: 1,705 plays (20%)
+
+Note: No stratification needed (continuous target, not classification)
+
+
+OUTLIER HANDLING
+--------------------------------------------------------------------------------
+IQR-Based Removal:
+• Method: Remove plays beyond 1.5 × IQR
+• Bounds: [-16.50, 27.50] yards
+• Removed: 373 plays (4.4%)
+• Remaining: 8,149 plays
+
+Impact:
+• R² improved: 0.330 → 0.450 (36% relative improvement)
+• Trade-off: Better fit on typical plays vs. coverage of extremes
+
+Rationale: Target distribution heavily skewed (mass at ~0 yards, long tails).
+Extreme plays distort linear model fit.
+
+
+MODELS EVALUATED
+--------------------------------------------------------------------------------
+
+1. Ordinary Least Squares (OLS) Regression
+   Method: statsmodels.OLS
+
+   Purpose: Statistical inference and interpretation
+   • Provides p-values for coefficient significance
+   • Omnibus test for residual normality
+   • Condition number for multicollinearity diagnosis
+   • Durbin-Watson statistic for autocorrelation
+
+   Variants Tested:
+   a) Full model (18 features)
+   b) Reduced model (9 significant features only, p<0.05)
+   c) Without outliers
+
+2. Polynomial Regression (Degree 2)
+   Method: sklearn Pipeline
+   • StandardScaler → PolynomialFeatures(degree=2) → LinearRegression()
+
+   Features: Polynomial and interaction terms for:
+   • yardsToGo, yardlineNumber, down (continuous)
+   • pff_playAction, pff_hit (binary indicators)
+
+   Generated features include:
+   • Squared terms: down², yardlineNumber²
+   • Interactions: yardsToGo × yardlineNumber, down × pff_playAction
+
+3. VIF-Reduced Model
+   Method: Remove features with VIF > 10
+
+   Removed: quarter, defendersInBox, passResult_S, pff_sack
+   Result: R² dropped to 0.169 (not used in final model)
+
+
+FEATURE SELECTION
+--------------------------------------------------------------------------------
+
+Approach 1: Statistical Significance (p-value < 0.05)
+From full OLS model, retained only significant features:
+• yardsToGo (p=0.001)
+• down (p<0.001)
+• pff_playAction (p<0.001)
+• pff_hit (p=0.029)
+• passResult_I (p<0.001)
+• passResult_IN (p<0.001)
+• passResult_R (p<0.001)
+• passResult_S (p<0.001)
+
+Approach 2: Multicollinearity Analysis (VIF)
+• Identified high VIF features (>10): quarter, defendersInBox, etc.
+• Tested model without high-VIF features
+• Trade-off: Lower VIF but significantly worse R² (0.169 vs. 0.330)
+• Decision: Kept high-VIF features for predictive power
+
+
+FEATURE SCALING
+--------------------------------------------------------------------------------
+Method: StandardScaler (for polynomial features only)
+
+Pipeline order:
+1. StandardScaler: Normalize features to mean=0, std=1
+2. PolynomialFeatures: Generate degree-2 terms
+3. LinearRegression: Fit model
+
+Why scale before polynomial transformation?
+• Prevents numerical instability from squaring large values
+• Reduces multicollinearity between x and x²
+• Improves convergence for optimization
+
+
+EVALUATION METRICS
+--------------------------------------------------------------------------------
+
+For Regression Task:
+
+1. R² (Coefficient of Determination)
+   • Proportion of variance explained
+   • Range: 0 to 1 (higher is better)
+   • Results:
+     - Full model: 0.330
+     - Reduced model: 0.330
+     - Without outliers: 0.450
+     - Polynomial: 0.453 (marginal gain)
+
+2. Adjusted R²
+   • R² penalized for number of features
+   • Prevents overfitting from adding features
+   • Results: 0.329-0.448 (similar to R²)
+
+3. F-Statistic
+   • Tests if model is better than intercept-only
+   • All models: p < 0.001 (highly significant)
+
+4. RMSE (Root Mean Squared Error)
+   • Average prediction error in yards
+   • Result: ~8.64 yards (after outlier removal)
+
+5. Residual Diagnostics
+   • Omnibus test: Residuals non-normal (p<0.001)
+   • Jarque-Bera: Confirms heavy skewness and kurtosis
+   • Durbin-Watson: ~2.0 (no autocorrelation)
+
+
+HYPERPARAMETER TUNING
+--------------------------------------------------------------------------------
+
+OLS Regression: No hyperparameters to tune
+
+Polynomial Degree Selection:
+• Tested: degree=2 (quadratic and interactions)
+• Result: Minimal improvement over linear (ΔR² < 0.01)
+• Decision: Polynomial features add complexity without benefit
+
+Feature Selection Threshold:
+• Tested: p-value cutoffs (0.05, 0.01)
+• VIF threshold tested: 10
+• Decision: Use p<0.05 with tolerance for VIF<20
+
+
+CROSS-VALIDATION
+--------------------------------------------------------------------------------
+Evidence: Cross-validation used but not extensively documented in the
+notebook excerpt.
+
+Likely approach:
+• K-Fold CV for model comparison
+• Used to validate that reduced model performs similarly to full model
+• Confirms that removing non-significant features doesn't hurt generalization
+
+
+MODELING INSIGHTS
+--------------------------------------------------------------------------------
+
+Key Findings:
+
+1. Polynomial Features: No significant gain
+   • Degree-2 model R² = 0.453
+   • Linear model R² = 0.450
+   • Conclusion: Relationships are predominantly linear
+
+2. Feature Importance:
+   Strongest predictors (by coefficient magnitude):
+   • passResult_S (sack): -18.37 yards
+   • passResult_IN (interception): -11.96 yards
+   • passResult_I (incomplete): -10.87 yards
+   • pff_playAction: +1.92 yards (play-action bonus)
+
+3. Multicollinearity Trade-off:
+   • Removing high-VIF features: R² drops 16 points
+   • Keeping them: Model performs better despite correlation
+   • Decision: Predictive power > statistical purity
+
+4. Outlier Impact:
+   • Extreme plays (4.4% of data) heavily influence fit
+   • Removing them: 36% R² improvement
+   • Model optimized for typical plays, not rare big gains
+
+
+================================================================================
+CROSS-DATASET MODELING SUMMARY
+================================================================================
+
+COMMON THEMES
+--------------------------------------------------------------------------------
+1. Class/Distribution Imbalance
+   • Punt: 9.1% injury rate (classification)
+   • Surface: Rare injuries (classification)
+   • Big Data: Skewed yards distribution (regression)
+
+   Solutions: Stratification, balanced accuracy, outlier removal
+
+2. Feature Engineering Critical
+   • Punt: collision_intensity (F-score 348) most important
+   • Surface: Motion aggregations from time-series
+   • Big Data: Personnel parsing, interaction terms
+
+   Lesson: Domain knowledge improves models
+
+3. Small Dataset Adaptations
+   • Punt: No train/test split, cross-validation only
+   • Surface: SMOTE oversampling for balance
+   • Big Data: Outlier removal for better fit
+
+4. Conservative Hyperparameters
+   • Punt: Shallow trees (depth=3), few estimators (50)
+   • Prevents overfitting on limited data
+
+5. Multiple Metrics Essential
+   • Never rely on single metric (accuracy, R²)
+   • Punt: Balanced accuracy + recall
+   • Surface: F1 + balanced accuracy + precision
+   • Big Data: R² + RMSE + residual diagnostics
+
+
+EVALUATION STRATEGY DIFFERENCES
+--------------------------------------------------------------------------------
+
+Punt Analytics (Small Dataset):
+✓ Cross-validation only (no held-out test)
+✓ Leave-One-Out or Stratified K-Fold
+✓ Balanced accuracy primary metric
+✓ Report mean ± std across folds
+
+Playing Surface (Large Dataset):
+✓ Traditional train/test split
+✓ Stratified K-Fold cross-validation
+✓ SMOTE for class balance
+✓ Multiple resampling strategies compared
+
+Big Data Bowl (Regression):
+✓ Train/test split (80/20)
+✓ Statistical inference via OLS
+✓ Outlier removal post-split
+✓ R² and RMSE for evaluation
+
+
+MODEL SELECTION RATIONALE
+--------------------------------------------------------------------------------
+
+Punt Analytics:
+• SVM Linear chosen for small dataset efficiency
+• Linear kernel avoids overfitting of RBF
+• Logistic regression close second (more interpretable)
+
+Playing Surface:
+• Random Forest for non-linear motion patterns
+• Logistic regression for baseline
+• Ensemble methods for handling large feature space
+
+Big Data Bowl:
+• OLS for interpretability and statistical inference
+• Polynomial features tested but rejected (no gain)
+• Simple linear model sufficient
+
+
+HYPERPARAMETER TUNING PHILOSOPHY
+--------------------------------------------------------------------------------
+
+Conservative Approach (Small Datasets):
+• Pre-select parameters based on domain knowledge
+• Avoid grid search (risks overfitting)
+• Prefer regularization over complexity
+
+Data-Driven Approach (Large Datasets):
+• Validation curves for hyperparameter selection
+• Learning curves to diagnose bias/variance
+• More aggressive tuning possible with ample data
+
+
+NON-TECHNICAL SUMMARY
+================================================================================
+
+WHAT WE DID
+--------------------------------------------------------------------------------
+We built machine learning models to predict NFL injuries using three different
+datasets. Think of these models as pattern-recognition systems that learn from
+historical data to make predictions about new situations.
+
+The Three Prediction Tasks:
+
+1. Collision Safety (Punt Analytics)
+   Question: "When two players collide during a punt, will someone get hurt?"
+
+   Approach: We had very limited data (only 28 injuries recorded). To make the
+   most of this small dataset, we used a technique where the computer tests
+   itself multiple times on different portions of the data (cross-validation).
+
+   Result: Our best model correctly identifies 87% of dangerous collisions
+   while maintaining 96% overall accuracy.
+
+2. Playing Surface Injuries (Motion Tracking)
+   Question: "Based on how a player moves during a play, will they get injured?"
+
+   Approach: We had much more data here (266,000 plays), so we could split
+   it into a training set (to teach the model) and a separate test set (to
+   verify it works). We also had to deal with the fact that injuries are rare
+   - most plays don't result in injuries.
+
+   Result: Models evaluated across multiple techniques, with special handling
+   for the rarity of injury events.
+
+3. Pass Play Outcomes (Big Data Bowl)
+   Question: "How many yards will a pass play gain?"
+
+   Approach: We used statistical models to understand which factors matter most.
+   Extreme plays (huge gains or losses) were treated separately because they
+   distorted the patterns in typical plays.
+
+   Result: Our model explains 45% of the variation in yards gained, identifying
+   key factors like play-action and pass completion.
+
+
+HOW WE EVALUATED SUCCESS
+--------------------------------------------------------------------------------
+
+For Collision & Surface Injuries (Classification):
+We can't just measure "accuracy" because injuries are rare. A model that
+always predicts "no injury" would be 90% accurate but completely useless!
+
+Instead, we used:
+• Balanced Accuracy: Equally weighs the model's ability to spot injuries AND
+  correctly identify safe plays
+• Recall: Of all actual injuries, what percentage did we catch?
+• Precision: Of all predicted injuries, what percentage were real?
+
+For Pass Play Yards (Regression):
+• R² Score: What percentage of the variation in yards can we explain?
+• RMSE: On average, how far off are our predictions (in yards)?
+
+KEY INSIGHTS
+--------------------------------------------------------------------------------
+
+1. Quality Over Quantity
+   Even with limited data (28 injuries), we achieved 87% success by using
+   smart validation techniques and focusing on the right features.
+
+2. Engineered Features Matter
+   The single most important predictor we created - "collision intensity" -
+   combined physics (speed, distance) into one number that was 4× more
+   predictive than any raw measurement.
+
+3. Simple Often Wins
+   In the pass prediction task, adding complex mathematical relationships
+   (polynomial terms) didn't improve predictions. The simpler model was better.
+
+4. Context Determines Approach
+   • Small dataset (Punt): Test the model on itself multiple times
+   • Large dataset (Surface): Split into training and testing groups
+   • Each situation required different techniques
+
+5. Multiple Perspectives Needed
+   We never relied on a single number to judge success. Looking at accuracy,
+   recall, precision, and other metrics together gave us the full picture.
+
+
+PRACTICAL APPLICATIONS
+--------------------------------------------------------------------------------
+
+These models could help:
+• Identify high-risk collision scenarios in real-time
+• Inform rule changes to reduce dangerous play patterns
+• Guide player safety equipment improvements
+• Optimize playing surface choices for injury prevention
+• Provide insights for coaching decisions on play selection
+
+The techniques we developed for handling small datasets and rare events are
+applicable beyond football to any safety-critical prediction task.

@@ -1,0 +1,199 @@
+DATA CLEANING AND PREPROCESSING ANALYSIS
+NFL Collision Validation System (nfl_collision_validation.py)
+================================================================================
+
+1. HANDLING MISSING VALUES
+--------------------------------------------------------------------------------
+Missing Value Detection & Resolution:
+• Partner IDs: Converted 'primarypartnergsisid' from string to numeric using
+  pd.to_numeric() with errors='coerce' (line 31-33) to handle invalid entries
+  - Invalid entries are converted to NaN
+  - Collisions without valid partner IDs are explicitly skipped (line 229-230)
+
+• Data Availability Checks:
+  - Minimum data points required: At least 3 motion records per player for
+    collision analysis (lines 245, 329)
+  - Players with insufficient tracking data are excluded from analysis
+
+• Time Alignment: Missing or non-overlapping time periods between players are
+  handled by checking if max_start_time >= min_end_time, returning None if
+  insufficient overlap exists (lines 91-92)
+
+• Interpolation Safety: Requires minimum 3 common time points for interpolation;
+  returns None otherwise (lines 97-98)
+
+
+2. OUTLIER DETECTION AND REMOVAL
+--------------------------------------------------------------------------------
+Distance-Based Filtering:
+• Collision Proximity Threshold: Only player pairs within 5 yards minimum
+  distance are classified as valid collisions (line 336)
+  - This removes false positives from players who never actually interacted
+
+Data Quality Checks:
+• File Existence: Validates NGS data file paths before loading (lines 56-63)
+• Time Series Validation: Ensures time series data can be properly interpolated
+  and aligned before processing
+
+No Statistical Outlier Removal:
+• The code does NOT perform statistical outlier detection (IQR, z-scores, etc.)
+  on feature values, preserving all valid collision events regardless of
+  feature extremes
+
+
+3. ADDRESSING INCONSISTENCIES
+--------------------------------------------------------------------------------
+Column Standardization:
+• All column names converted to lowercase and underscores removed using
+  .str.lower().str.replace('_', '') (lines 28, 60)
+• Ensures consistent naming across all datasets from different time periods
+
+Data Type Consistency:
+• Time fields converted to datetime objects for proper temporal calculations
+  (lines 79-80)
+• Seconds calculated relative to play start for time alignment (lines 85-86)
+
+Player Tracking Alignment:
+• Interpolation to common time grid: Both players' motion data resampled to
+  common 10Hz time points (0.1 second intervals) to ensure synchronized
+  feature calculation (line 95)
+
+
+4. FEATURE ENGINEERING
+--------------------------------------------------------------------------------
+
+A. Temporal Features:
+   • Time alignment through interpolation (line 95)
+   • Time to closest approach (line 124)
+   • Collision timing as fraction of play duration (line 186)
+
+B. Spatial Features:
+   • Distance metrics: min, max, average, start, end distances (lines 117-120)
+   • Position interpolation for x, y coordinates (lines 100-108)
+
+C. Kinematic Features:
+   • Velocity gradients calculated using np.gradient() (lines 127-130)
+   • Relative velocities between players (lines 132-139)
+   • Acceleration calculated from speed changes (lines 175-178)
+   • Closing speed from distance gradient (lines 181-183)
+
+D. Collision Geometry:
+   • Collision angle from position vectors (line 146)
+   • Player orientations at impact (lines 149-150)
+   • Angle differences for head-on vs. side collision detection (lines 157-158)
+
+E. Derived/Engineered Features:
+   • Speed ratio between players (line 190)
+   • Speed difference magnitude (line 191)
+   • Speed retention: ratio of collision speed to maximum speed (lines 194-202)
+   • Collision intensity score: combines inverse distance with relative speed
+     (lines 204-209)
+     - Raw intensity normalized across full dataset later (lines 398-407)
+
+F. Categorical Features Retained:
+   • Impact type, player activity, partner activity, friendly fire status
+     (lines 258-261)
+
+G. Metadata:
+   • Season, game, play identifiers preserved for traceability (lines 253-255)
+
+
+5. SCALING AND NORMALIZATION
+--------------------------------------------------------------------------------
+Applied Normalization:
+• Collision Intensity Feature: Two-step normalization process
+  1. During calculation: min_dist_norm = 1 / (min_distance + 0.1) (line 207)
+  2. Post-collection: Speed component normalized by maximum relative speed
+     across all collisions (lines 398-407)
+
+No Standard Scaling Applied:
+• Features are NOT standardized (no z-score normalization or min-max scaling)
+• Raw physical units preserved (yards, yards/second, degrees)
+• This preserves interpretability for domain experts
+
+Small Value Protection:
+• Added epsilon (1e-6) to denominators to prevent division by zero
+  (lines 190, 195, 200)
+
+
+6. ENCODING
+--------------------------------------------------------------------------------
+Binary Target Encoding:
+• 'is_injury' field: 1 for injury collisions, 0 for non-injury (lines 262, 344)
+
+Categorical Variables:
+• Impact type, activities, friendly fire status preserved as strings
+• No one-hot encoding or label encoding performed in this preprocessing script
+• Downstream modeling code would need to handle categorical encoding
+
+
+7. DIMENSIONALITY REDUCTION
+--------------------------------------------------------------------------------
+No Dimensionality Reduction Applied:
+• No PCA, t-SNE, or feature selection algorithms used
+• All 30+ calculated features retained in output
+• Feature selection deferred to modeling phase
+
+
+8. DATA SEGMENTATION AND BATCHING
+--------------------------------------------------------------------------------
+Memory Management:
+• Batch processing for large datasets: 1,000 collisions per batch (line 350)
+• Periodic saves to disk to prevent memory overflow (lines 350-357)
+• Final aggregation combines all batches (lines 372-429)
+
+Data Splitting:
+• Injury vs. Non-injury: Explicit separation maintained throughout
+• Injury plays excluded from non-injury collision search (lines 277-285)
+
+
+9. KEY FINDINGS AND ISSUES IDENTIFIED
+--------------------------------------------------------------------------------
+
+Strengths:
+✓ Comprehensive feature engineering capturing physics of collisions
+✓ Robust handling of missing partner IDs and insufficient tracking data
+✓ Time-alignment ensures valid temporal comparisons
+✓ Physical proximity threshold (5 yards) reduces false positive collisions
+✓ Batch processing enables handling of large-scale dataset
+✓ Preserves interpretability through raw physical units
+
+Potential Issues:
+⚠ No cross-validation during preprocessing (only data preparation)
+⚠ No feature selection - all engineered features included
+⚠ Categorical variables not encoded (requires downstream handling)
+⚠ No standardization may cause issues for distance-based models
+⚠ Class imbalance not addressed during preprocessing (injury vs non-injury)
+⚠ No outlier removal in feature space - extreme values preserved
+⚠ Interpolation assumes linear motion between tracking points (may miss
+   sudden direction changes)
+
+Data Quality Metrics:
+• Injury collision sample: Successfully analyzed 37 injury collisions (typical)
+• Non-injury collisions: Up to 50,000 processed (configurable limit)
+• Collision proximity: 5-yard threshold for valid interactions
+• Tracking data: Minimum 3 time points required per player
+• Temporal resolution: 10 Hz (0.1 second intervals) after interpolation
+
+
+10. PREPROCESSING WORKFLOW SUMMARY
+--------------------------------------------------------------------------------
+1. Load multi-year NGS tracking data + video review injury records
+2. Standardize column names and data types
+3. Extract injury collision pairs from video review
+4. For each collision pair:
+   a. Retrieve motion tracking data
+   b. Validate sufficient data points (≥3 per player)
+   c. Align time series through interpolation
+   d. Calculate 30+ collision features (kinematics, geometry, intensity)
+   e. Attach metadata and injury labels
+5. Process non-injury plays:
+   a. Exclude injury plays
+   b. Generate all pairwise player combinations
+   c. Filter by 5-yard proximity threshold
+   d. Calculate same feature set
+6. Save in batches to manage memory
+7. Combine and normalize collision intensity across full dataset
+8. Output final labeled dataset for modeling
+
+Output Dataset: capstone_file/punt_analytics/full_collision_dataset.csv
